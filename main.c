@@ -40,6 +40,14 @@ struct Matrix * matrix_transpose(struct Matrix *m) {
     swap_dim_t(&m->_rows, &m->_cols);
     return m;
 }
+struct Matrix * matrix_true_transpose(struct Matrix *src, struct Matrix *dst) {
+    assert(src->_rows == dst->_cols);
+    assert(src->_cols == dst->_rows);
+    for (dim_t r=0; r<dst->_rows; ++r)
+        for (dim_t c=0; c<dst->_cols; ++c)
+            set(dst, r, c, get(src, c, r));
+    return dst;
+}
 struct Matrix * matrix_dot(struct Matrix *lhs, struct Matrix *rhs, struct Matrix *out) {
     assert(lhs->_rows == out->_rows);
     assert(lhs->_cols == rhs->_rows);
