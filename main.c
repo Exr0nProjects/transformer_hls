@@ -14,6 +14,7 @@ void swap_dim_t(dim_t *a, dim_t *b) {
     //*a ^= *b ^= *a ^= *b;
 }
 
+/// MATRIX FUNCTIONS
 struct Matrix {
     val_t *_data; 
     dim_t  _rows;
@@ -85,6 +86,38 @@ struct Matrix * matrix_exp(struct Matrix *m) {  // in place
             set(m, r, c, (val_t) expf((float) get(m, r, c)));   // TODO: exp is for f32, which may not be val_t
     return m;
 }
+/// TRANSFORMER FUNCTIONS
+struct Matrix * pointwise_relu(struct Matrix *x) {
+    for (dim_t r=0; r<x->_rows; ++r) 
+        for (dim_t c=0; c<x->_cols; ++c)
+            if (get(x, r, c) < 0) 
+                set(x, r, c, 0);
+    return x;
+}
+
+struct Matrix * casually_masked_softmax(int seq_len, struct Matrix *x, struct Matrix *scratch)
+{
+    assert(x->_rows == seq_len);
+    assert(x->_cols == seq_len);
+    //assert(x->rowmajor == false);   // for maximum cache locality
+    assert(scratch->_cols == seq_len);
+    assert(scratch->_rows == 1);
+    // exp
+    matrix_exp(x);
+    // masked sum
+    for (dim_t c=0; c<seq_len; ++c) {
+        val_t sum = 0;
+        for (dim_t r=0; r<=c; ++r)
+            sum += get(x, r, c);
+        set(scratch, 0, c, sum);
+    }
+    // div
+    for (dim_t r=0; r<x->_rows; ++r)
+        for (dim_t c=0; c<x->_cols; ++c) 
+            if (r > c) set(x, r, c, 0);
+            else set(x, r, c, get(x, r, c) / get(scratch, 0, c));
+    return x;
+}
 
 // TODO: allocate all matrices
 
@@ -110,12 +143,14 @@ int main()
     val_t _c[3][3] = {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}};
     val_t _d[3][3] = {{-10, -6, -12}, {-9, -6, -12}, {-12, -8, -16}};
     val_t _e[2][2] = {{0, 0}, {0, 0}};
-    struct Matrix a, b, c, d, e;
+    val_t _scratch[1][3] = { {0, 0, 0} };
+    struct Matrix a, b, c, d, e, scratch;
     matrix_construct(&a, 3, 2, (val_t *)_a);
     matrix_construct(&b, 2, 3, (val_t *)_b);
     matrix_construct(&c, 3, 3, (val_t *)_c);
     matrix_construct(&d, 3, 3, (val_t *)_d);
     matrix_construct(&e, 2, 2, (val_t *)_e);
+    matrix_construct(&scratch, 1, 3, (val_t *)_scratch);
 
     matrix_dot(&a, &b, &c);
     matrix_print(matrix_add(&c, &d, &c));                   // should be all zeros
@@ -124,4 +159,5 @@ int main()
     matrix_dot(&b, &a, &c);
     matrix_print(matrix_add(&c, matrix_transpose(&d), &c)); // should be all zeros
     matrix_print(matrix_exp(&c));                           // should be all ones
+    matrix_print(casually_masked_softmax(3, &c, &scratch));
 }
