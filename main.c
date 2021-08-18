@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <assert.h>
+#include <math.h>
 
 typedef float val_t;
 typedef size_t dim_t;
@@ -78,6 +79,12 @@ struct Matrix * matrix_add(struct Matrix *lhs, struct Matrix *rhs, struct Matrix
             set(out, r, c, get(lhs, r, c) + get(rhs, r, c));
     return out;
 }
+struct Matrix * matrix_exp(struct Matrix *m) {  // in place
+    for (dim_t r=0; r<m->_rows; ++r) 
+        for (dim_t c=0; c<m->_cols; ++c) 
+            set(m, r, c, (val_t) expf((float) get(m, r, c)));   // TODO: exp is for f32, which may not be val_t
+    return m;
+}
 
 // TODO: allocate all matrices
 
@@ -116,4 +123,5 @@ int main()
     matrix_transpose(&b);
     matrix_dot(&b, &a, &c);
     matrix_print(matrix_add(&c, matrix_transpose(&d), &c)); // should be all zeros
+    matrix_print(matrix_exp(&c));                           // should be all ones
 }
