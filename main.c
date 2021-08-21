@@ -119,6 +119,49 @@ struct Matrix * casually_masked_softmax(int seq_len, struct Matrix *x, struct Ma
     return x;
 }
 
+struct Matrix * layer_norm(struct Matrix *m, struct Matrix * w, struct Matrix * b){
+  //add assert statements
+  assert(w->_cols == 1);
+  assert(b->_cols == 1);
+  assert(w->_rows == m->_cols);
+  assert(b->_rows == m->_cols);
+  matrix_transpose(m);
+  //find the mean + std for each row
+  for(dim_t r = 0; r < m->_rows; ++r){
+    double mean = 0;
+    for(dim_t c = 0; c < m -> _cols; ++c){
+      mean += get(m, r, c);
+    }
+    mean /= m->_cols;
+    double std = 0;
+    for(dim_t c = 0; c < m -> _cols; ++c){
+      std += pow(get(m, r, c)-mean, 2);
+    }
+    std /= m->_cols;
+    std += 1e-5;
+    std = sqrt(std);
+    //do the normalization functions
+    for(dim_t c = 0; c < m -> _cols; ++c){
+      set(m, r, c, get(w, r, 0) * (get(m, r, c) - mean)/std + get(b, r, 0));
+    }
+  }
+  matrix_transpose(m);
+  return m;
+}
+
+
+
+struct Matrix * feed_forward_network(struct Matrix *m, struct Matrix * ln_w, struct Matrix * ln_b,  struct Matrix *fc_w, struct Matrix *fc_b, struct Matrix * proj_w, struct Matrix * proj_b, struct Matrix *copy_of_m, struct Matrix *aux_m){
+  //assert functions
+  m = layer_norm(m, ln_w, ln_b);
+
+  aux_m = add_biases(matrix_dot(fc_w, m, aux_m), fc_b);
+  aux_m = pointwise_relu(aux_m);
+  m = add_biases(matrix_dot(proj_w, aux_m, m), proj_b);
+
+  m = matrix_add(m, copy_of_m, m);
+  return m;
+}
 // TODO: allocate all matrices
 
 // TODO: the actual functions
