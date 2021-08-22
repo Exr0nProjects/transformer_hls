@@ -166,6 +166,68 @@ struct Matrix * feed_forward_network(struct Matrix *m, struct Matrix * ln_w, str
 
 // TODO: the actual functions
 
+struct Matrix * self_attention(struct Matrix *m, struct Matrix * ln_w, struct Matrix * ln_b, struct Matrix * attn_w, struct Matrix * attn_b, struct Matrix * proj_w, struct Matrix *proj_b, struct Matrix* copy_of_m, struct Matrix *aux_m, struct Matrix * query, struct Matrix *key, struct Matrix *value, struct Matrix * aux_attn_m, struct Matrix * scratch, struct Matrix * aux_2, val_t heads){
+  m = layer_norm(m, ln_w, ln_b);
+
+  val_t adim = m->_rows / heads;
+  // attn weights/biases
+  aux_m = add_biases(matrix_dot(attn_w, m, aux_m), attn_b);
+  /*aux_m = pointwise_relu(aux_m);
+  m = add_biases(matrix_dot(proj_w, aux_m, m), proj_b);*/
+
+  for(int h = 0; h < heads; h++){
+    //split into key/query/val
+    for(int i = 0; i < adim; i++){
+      for(int j = 0; j < m->_cols; j++){
+        set(query, i, j, get(aux_m, adim*h + i, j));
+      }
+    }
+    for(int i = 0; i < adim; i++){
+      for(int j = 0; j < m->_cols; j++){
+        set(key, i, j, get(aux_m, i+m->_rows+adim*h, j));
+      }
+    }
+    for(int i = 0; i < adim; i++){
+      for(int j = 0; j < m->_cols; j++){
+        set(value, i, j, get(aux_m, i+2*m->_rows+adim*h, j));
+      }
+    }
+
+    //matrix_print(query);
+    //matrix_print(key);
+
+    key = matrix_transpose(key);
+
+    aux_attn_m = matrix_dot(key, query, aux_attn_m);
+
+    key = matrix_transpose(key);
+    //printf("aux attn m \n");
+    //matrix_print(aux_attn_m);
+    aux_attn_m = matrix_divide(aux_attn_m, sqrt(adim));
+    //matrix_print(aux_attn_m);
+    aux_attn_m = matrix_transpose(aux_attn_m);
+    aux_attn_m = casually_masked_softmax(m->_rows, aux_attn_m, scratch);
+    //aux_attn_m = matrix_transpose(aux_attn_m);
+    //printf("softmax\n");
+    //matrix_print(aux_attn_m);
+    query = matrix_dot(value, aux_attn_m, query);
+    //printf("query \n");
+    //matrix_print(query);
+    for(int i = 0; i < adim; i++){
+      for(int j = 0; j < m->_cols; j++){
+        set(m, i+adim*h, j, get(query, i, j));
+      }
+    }
+  }
+  //matrix_print(m);
+  aux_2 = matrix_dot(proj_w, m, aux_2);
+  aux_2 = add_biases(aux_2, proj_b);
+  //matrix_print(aux_2);
+  m = matrix_add(aux_2, copy_of_m, m);
+
+  return m;
+}
+
 
 void matrix_print(struct Matrix *m) {
     // TODO: delete, since this can't be HLS-ified
@@ -203,4 +265,46 @@ int main()
     matrix_print(matrix_add(&c, matrix_transpose(&d), &c)); // should be all zeros
     matrix_print(matrix_exp(&c));                           // should be all ones
     matrix_print(casually_masked_softmax(3, &c, &scratch));
+    
+    //self-attention check
+    val_t _x[2][2] = {{0.01, .02}, {.05, .06}};
+    val_t _attn_w[6][2] = {{0, .01}, {.02, .03}, {.04, .05}, {.06, .07}, {.08, .09}, {.10, .11}};
+    val_t _attn_b[6][1] = {{0}, {.01}, {.02}, {.03}, {.04}, {.05}};
+    val_t _p_w[2][2] = {{0, 1}, {2, 3}};
+    val_t _p_b[2][1] = {{0}, {1}};
+    val_t _aux1[6][2] = {{0, 1}, {2, 3}, {4, 5}, {6, 7}, {8, 9}, {10, 11}};
+    val_t _x_copy[2][2] = {{0.01, .02}, {.05, .06}};
+
+    val_t _query[1][2] = {{1, 2}};
+    val_t _key[1][2] = {{1, 2}};
+    val_t _value[1][2] = {{1, 2}};
+
+    val_t _ln_w[2][1] = {{.3}, {.4}};
+    val_t _ln_b[2][1] = {{.2}, {.6}};
+
+    val_t _aux_attn[2][2] = {{1, 2}, {1, 2}};
+
+    val_t _aux_2[2][2] = {{0.01, .02}, {.05, .06}};
+
+    val_t _scratch2[1][2] = {{1, 2}};
+
+    struct Matrix x, attn_w, attn_b, p_w, p_b, aux1, x_copy, query, key, value, aux_attn, ln_w, ln_b, aux_2, scratch2;
+
+    matrix_construct(&x, 2, 2, (val_t *)_x);
+    matrix_construct(&attn_w, 6, 2, (val_t *)_attn_w);
+    matrix_construct(&attn_b, 6, 1, (val_t *)_attn_b);
+    matrix_construct(&p_w, 2, 2, (val_t *)_p_w);
+    matrix_construct(&p_b, 2, 1, (val_t *)_p_b);
+    matrix_construct(&aux1, 6, 2, (val_t *)_aux1);
+    matrix_construct(&x_copy, 2, 2, (val_t *)_x_copy);
+    matrix_construct(&query, 1, 2, (val_t *)_query);
+    matrix_construct(&key, 1, 2, (val_t *)_key);
+    matrix_construct(&value, 1, 2, (val_t *)_value);
+    matrix_construct(&ln_w, 2, 1, (val_t *)_ln_w);
+    matrix_construct(&ln_b, 2, 1, (val_t *)_ln_b);
+    matrix_construct(&aux_2, 2, 2, (val_t *)_aux_2);
+    matrix_construct(&scratch2, 1, 2, (val_t *)_scratch2);
+    matrix_construct(&aux_attn, 2, 2, (val_t *)_aux_attn);
+
+    matrix_print(self_attention(&x, &ln_w, &ln_b, &attn_w, &attn_b, &p_w, &p_b, &x_copy, &aux1, &query, &key, &value, &aux_attn, &scratch2, &aux_2, 2));
 }
