@@ -237,6 +237,35 @@ void matrix_print(struct Matrix *m) {
         } printf("\n");
     } printf("\n");
 }
+
+char *eptr;
+
+struct Matrix * read_csv(char *file_name, struct Matrix * m){
+	FILE *the_file = fopen(file_name, "r");
+  if (the_file == NULL){
+    perror("Cannot open file");
+    return NULL;
+  }
+  char line[100000]; // NTFS: might need to be larger
+  int row = 0, col = 0;
+  while(fgets(line, sizeof(line), the_file)){
+    char *token;
+    token = strtok(line, ",");
+    col = 0;
+    while(token != NULL){
+      set(m, row, col, strtod(token, &eptr));
+      //a[row][col] = strtod(token, &eptr);
+      //printf("%s", token);
+      token = strtok(NULL, ",");
+      col ++;
+    }
+    printf("\n");
+    row ++;
+  }
+  fclose(the_file);
+  return m;
+}
+
 int main() 
 {
     // TODO: read weights from file
