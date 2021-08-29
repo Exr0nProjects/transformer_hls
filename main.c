@@ -80,6 +80,24 @@ struct Matrix * matrix_add(struct Matrix *lhs, struct Matrix *rhs, struct Matrix
             set(out, r, c, get(lhs, r, c) + get(rhs, r, c));
     return out;
 }
+
+struct Matrix * matrix_divide(struct Matrix *x, val_t quotient){
+  for (dim_t r=0; r<x->_rows; ++r) 
+        for (dim_t c=0; c<x->_cols; ++c)
+                set(x, r, c, get(x, r, c)/quotient);
+  return x;
+}
+
+
+struct Matrix * add_biases(struct Matrix *m, struct Matrix *b) {
+  for(dim_t r = 0; r < m -> _rows; r++){
+    for(dim_t c = 0; c < m -> _cols; ++c){
+      set(m, r, c, get(m, r, c) + get(b, r, 0));
+    }
+  }
+  return m;
+}
+
 struct Matrix * matrix_exp(struct Matrix *m) {  // in place
     for (dim_t r=0; r<m->_rows; ++r) 
         for (dim_t c=0; c<m->_cols; ++c) 
