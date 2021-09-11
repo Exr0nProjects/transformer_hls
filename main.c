@@ -2,9 +2,14 @@
 #include <stdbool.h>
 #include <assert.h>
 #include <math.h>
+#include <string.h>
+#include <stdlib.h>
 
 typedef float val_t;
-typedef size_t dim_t;
+typedef int dim_t;
+
+const dim_t emb_dim = 2;
+const int stack_height = 12;
 
 void swap_dim_t(dim_t *a, dim_t *b) {
     dim_t c = *a;
@@ -19,339 +24,295 @@ struct Matrix {
     val_t *_data; 
     dim_t  _rows;
     dim_t  _cols;
-    bool rowmajor;
+    int rowmajor;
 };
-void matrix_construct(struct Matrix *m, dim_t rows, dim_t cols, val_t data[]) {
-    // m should already be declared and allocated
-    // assert(sizeof(data) == rows*cols*sizeof(val_t)); // not actually, bc data has decayed into ptr
-    m->_data = data;
-    m->_rows = rows;
-    m->_cols = cols;
-    m->rowmajor = true;
+
+val_t get(val_t *dat, int rowmajor, dim_t rows, dim_t cols, dim_t row, dim_t col) {
+    if (rowmajor) return dat[row * cols + col];
+    else return dat[col * rows + row];
 }
-val_t get(struct Matrix *m, dim_t row, dim_t col) {
-    if (m->rowmajor) return m->_data[row * m->_cols + col];
-    else             return m->_data[col * m->_rows + row];
+void set(val_t *dat, int rowmajor, dim_t rows, dim_t cols, dim_t row, dim_t col, val_t val) {
+    if (rowmajor) dat[row * cols + col] = val;
+    else          dat[col * rows + row] = val;
 }
-void set(struct Matrix *m, dim_t row, dim_t col, val_t val) {
-    if (m->rowmajor) m->_data[row * m->_cols + col] = val;
-    else             m->_data[col * m->_rows + row] = val;
+
+void matrix_transpose(int *row_major, dim_t *rows, dim_t *cols){
+  *row_major ^= true;
+  swap_dim_t(rows, cols);
 }
-struct Matrix * matrix_transpose(struct Matrix *m) {
-    m->rowmajor ^= true;
-    swap_dim_t(&m->_rows, &m->_cols);
-    return m;
+
+void matrix_print(val_t *m, int row_major, dim_t rows, dim_t cols) {
+    // TODO: delete, since this can't be HLS-ified
+    for (int i=0; i<rows; ++i) {
+        for (int j=0; j<cols; ++j) {
+            printf("%10.4f", get(m, row_major, rows, cols, i, j));
+        } printf("\n");
+    } printf("\n");
 }
-struct Matrix * matrix_true_transpose(struct Matrix *src, struct Matrix *dst) {
-    assert(src->_rows == dst->_cols);
-    assert(src->_cols == dst->_rows);
-    for (dim_t r=0; r<dst->_rows; ++r)
-        for (dim_t c=0; c<dst->_cols; ++c)
-            set(dst, r, c, get(src, c, r));
-    return dst;
-}
-struct Matrix * matrix_dot(struct Matrix *lhs, struct Matrix *rhs, struct Matrix *out) {
-    assert(lhs->_rows == out->_rows);
-    assert(lhs->_cols == rhs->_rows);
-    assert(rhs->_cols == out->_cols);
+
+/*dot product stuff*/
+
+void matrix_dot(val_t *lhs, dim_t l_rows, dim_t l_cols, int l_row_major, val_t *rhs, dim_t r_rows, dim_t r_cols, int r_row_major, val_t *out, dim_t out_rows, dim_t out_cols, int out_row_major) {
+    assert(l_rows == out_rows);
+    assert(l_cols == r_rows);
+    assert(r_cols == out_cols);
     // ideally lhs->rowmajor && !rhs->rowmajor
     
-    // NTFS: HOT CODE! optimize me
-    // also, I guess the HLS-ify people will have to make a bunch of copies of this fn, based on all the matrix sizes we have?
-    for (dim_t r=0; r<out->_rows; ++r) {
-        for (dim_t c=0; c<out->_cols; ++c) {
+    for (dim_t r=0; r<out_rows; ++r) {
+        for (dim_t c=0; c<out_cols; ++c) {
             val_t sum = 0;
-            for (dim_t i=0; i<lhs->_cols; ++i) {
-                sum += get(lhs, r, i) * get(rhs, i, c);
+            for (dim_t i=0; i<l_cols; ++i) {
+                sum += get(lhs, l_row_major, l_rows, l_cols, r, i) * get(rhs, r_row_major, r_rows, r_cols, i, c);
             }
-            set(out, r, c, sum);
+            set(out, out_row_major, out_rows, out_cols, r, c, sum);
         }
     }
-    return out;
 }
-struct Matrix * matrix_add(struct Matrix *lhs, struct Matrix *rhs, struct Matrix *out) {
-    assert(lhs->_rows == rhs->_rows);
-    assert(lhs->_cols == rhs->_cols);
-    assert(rhs->_rows == out->_rows);
-    assert(rhs->_cols == out->_cols);
+void matrix_add(val_t *lhs, dim_t l_rows, dim_t l_cols, int l_row_major, val_t *rhs, dim_t r_rows, dim_t r_cols, int r_row_major, val_t *out, dim_t out_rows, dim_t out_cols, int out_row_major) {
+    assert(l_rows == r_rows);
+    assert(l_cols == r_cols);
+    assert(r_rows == out_rows);
+    assert(r_cols == out_cols);
     // ideally lhs->rowmajor = true && rhs->rowmajor. maybe make an add_transposed fn and swap loop order?
-    for (dim_t r=0; r<out->_rows; ++r)
-        for (dim_t c=0; c<out->_cols; ++c)
-            set(out, r, c, get(lhs, r, c) + get(rhs, r, c));
-    return out;
+    for (dim_t r=0; r<out_rows; ++r)
+        for (dim_t c=0; c<out_cols; ++c)
+            set(out, out_row_major, out_rows, out_cols, r, c, get(lhs, l_row_major, l_rows, l_cols, r, c) + get(rhs, r_row_major, r_rows, r_cols, r, c));
 }
-
-struct Matrix * matrix_divide(struct Matrix *x, val_t quotient){
-  for (dim_t r=0; r<x->_rows; ++r) 
-        for (dim_t c=0; c<x->_cols; ++c)
-                set(x, r, c, get(x, r, c)/quotient);
-  return x;
-}
-
-
-struct Matrix * add_biases(struct Matrix *m, struct Matrix *b) {
-  for(dim_t r = 0; r < m -> _rows; r++){
-    for(dim_t c = 0; c < m -> _cols; ++c){
-      set(m, r, c, get(m, r, c) + get(b, r, 0));
+void add_biases(val_t *m, dim_t m_rows, dim_t m_cols, int m_row_major, val_t *b, dim_t b_rows, dim_t b_cols, int b_row_major) {
+  for(dim_t r = 0; r < m_rows; r++){
+    for(dim_t c = 0; c < m_cols; ++c){
+      set(m, m_row_major, m_rows, m_cols, r, c, get(m, m_row_major, m_rows, m_cols, r, c) + get(b, b_row_major, b_rows, b_cols, r, 0));
     }
   }
-  return m;
+}
+void matrix_exp(val_t *m, dim_t m_rows, dim_t m_cols, int m_row_major) {  // in place
+    for (dim_t r=0; r<m_rows; ++r) 
+        for (dim_t c=0; c<m_cols; ++c) 
+            set(m, m_row_major, m_rows, m_cols, r, c, (val_t) expf((float) get(m, m_row_major, m_rows, m_cols, r, c)));   // TODO: exp is for f32, which may not be val_t
 }
 
-struct Matrix * matrix_exp(struct Matrix *m) {  // in place
-    for (dim_t r=0; r<m->_rows; ++r) 
-        for (dim_t c=0; c<m->_cols; ++c) 
-            set(m, r, c, (val_t) expf((float) get(m, r, c)));   // TODO: exp is for f32, which may not be val_t
-    return m;
-}
-/// TRANSFORMER FUNCTIONS
-struct Matrix * pointwise_relu(struct Matrix *x) {
-    for (dim_t r=0; r<x->_rows; ++r) 
-        for (dim_t c=0; c<x->_cols; ++c)
-            if (get(x, r, c) < 0) 
-                set(x, r, c, 0);
-    return x;
+void matrix_divide(val_t *m, dim_t m_rows, dim_t m_cols, int m_row_major, val_t quotient){
+  for (dim_t r=0; r<m_rows; ++r) 
+        for (dim_t c=0; c<m_cols; ++c)
+                set(m, m_row_major, m_rows, m_cols, r, c, get(m, m_row_major, m_rows, m_cols, r, c)/quotient);
 }
 
-struct Matrix * casually_masked_softmax(int seq_len, struct Matrix *x, struct Matrix *scratch)
+void pointwise_relu(val_t *m, dim_t m_rows, dim_t m_cols, int m_row_major) {
+    for (dim_t r=0; r<m_rows; ++r) 
+        for (dim_t c=0; c<m_cols; ++c)
+            if (get(m, m_row_major, m_rows, m_cols, r, c) < 0) 
+                set(m, m_row_major, m_rows, m_cols, r, c, 0);
+}
+
+void casually_masked_softmax(int seq_len, val_t *m, dim_t m_rows, dim_t m_cols, int m_row_major, val_t *scratch, dim_t scratch_rows, dim_t scratch_cols, int scratch_row_major)
 {
-    assert(x->_rows == seq_len);
-    assert(x->_cols == seq_len);
+    assert(m_rows == seq_len);
+    assert(m_cols == seq_len);
     //assert(x->rowmajor == false);   // for maximum cache locality
-    assert(scratch->_cols == seq_len);
-    assert(scratch->_rows == 1);
+    assert(scratch_cols == seq_len);
+    assert(scratch_rows == 1);
     // exp
-    matrix_exp(x);
+    matrix_exp(m, m_rows, m_cols, m_row_major);
     // masked sum
     for (dim_t c=0; c<seq_len; ++c) {
         val_t sum = 0;
         for (dim_t r=0; r<=c; ++r)
-            sum += get(x, r, c);
-        set(scratch, 0, c, sum);
+            sum += get(m, m_row_major, m_rows, m_cols, r, c);
+        set(scratch, scratch_row_major, scratch_rows, scratch_cols, 0, c, sum);
     }
     // div
-    for (dim_t r=0; r<x->_rows; ++r)
-        for (dim_t c=0; c<x->_cols; ++c) 
-            if (r > c) set(x, r, c, 0);
-            else set(x, r, c, get(x, r, c) / get(scratch, 0, c));
-    return x;
+    for (dim_t r=0; r<m_rows; ++r)
+        for (dim_t c=0; c<m_cols; ++c) 
+            if (r > c) set(m, m_row_major, m_rows, m_cols, r, c, 0);
+            else set(m, m_row_major, m_rows, m_cols, r, c, get(m, m_row_major, m_rows, m_cols, r, c) / get(scratch, scratch_row_major, scratch_rows, scratch_cols, 0, c));
 }
 
-struct Matrix * layer_norm(struct Matrix *m, struct Matrix * w, struct Matrix * b){
+/*layer_norm - finish doc later*/
+void layer_norm(val_t *dat, dim_t dat_rows, dim_t dat_cols, int dat_row_major, val_t * w, dim_t w_rows, dim_t w_cols, int w_row_major, val_t * b, dim_t b_rows, dim_t b_cols, int b_row_major){
   //add assert statements
-  assert(w->_cols == 1);
-  assert(b->_cols == 1);
-  assert(w->_rows == m->_cols);
-  assert(b->_rows == m->_cols);
-  matrix_transpose(m);
+  assert(w_cols == 1);
+  assert(b_cols == 1);
+  assert(w_rows == dat_cols);
+  assert(b_rows == dat_cols);
+  
+  matrix_transpose(&dat_row_major, &dat_rows, &dat_cols);
+  //printf("%i, %i, %i \n", dat_row_major, dat_rows, dat_cols);
   //find the mean + std for each row
-  for(dim_t r = 0; r < m->_rows; ++r){
-    double mean = 0;
-    for(dim_t c = 0; c < m -> _cols; ++c){
-      mean += get(m, r, c);
+  for(dim_t r = 0; r < dat_rows; ++r){
+    val_t mean = 0;
+    for(dim_t c = 0; c < dat_cols; ++c){
+      mean += get(dat, dat_row_major, dat_rows, dat_cols, r, c);
     }
-    mean /= m->_cols;
-    double std = 0;
-    for(dim_t c = 0; c < m -> _cols; ++c){
-      std += pow(get(m, r, c)-mean, 2);
+    mean /= dat_cols;
+    val_t std = 0;
+    for(dim_t c = 0; c < dat_cols; ++c){
+      std += pow(get(dat, dat_row_major, dat_rows, dat_cols, r, c)-mean, 2);
     }
-    std /= m->_cols;
+    std /= dat_cols;
     std += 1e-5;
     std = sqrt(std);
     //do the normalization functions
-    for(dim_t c = 0; c < m -> _cols; ++c){
-      set(m, r, c, get(w, r, 0) * (get(m, r, c) - mean)/std + get(b, r, 0));
+    for(dim_t c = 0; c < dat_cols; ++c){
+      set(dat, dat_row_major, dat_rows, dat_cols, r, c, get(w, w_row_major, w_rows, w_cols, r, 0) * (get(dat, dat_row_major, dat_rows, dat_cols, r, c) - mean)/std + get(b, b_row_major, b_rows, b_cols, r, 0));
     }
   }
-  matrix_transpose(m);
-  return m;
+  
+  matrix_transpose(&dat_row_major, &dat_rows, &dat_cols);
 }
 
-
-
-struct Matrix * feed_forward_network(struct Matrix *m, struct Matrix * ln_w, struct Matrix * ln_b,  struct Matrix *fc_w, struct Matrix *fc_b, struct Matrix * proj_w, struct Matrix * proj_b, struct Matrix *copy_of_m, struct Matrix *aux_m){
+void feed_forward_network(val_t *m, int m_row_major, val_t * ln_w, int ln_w_row_major, val_t * ln_b, int ln_b_row_major, val_t *fc_w, int fc_w_row_major, val_t *fc_b, int fc_b_row_major, val_t * proj_w, int proj_w_row_major, val_t * proj_b, int proj_b_row_major, val_t *copy_of_m, val_t *aux_m, int aux_m_row_major){
   //assert functions
-  m = layer_norm(m, ln_w, ln_b);
+  layer_norm(m, emb_dim, emb_dim, m_row_major, ln_w, emb_dim, 1, ln_w_row_major, ln_b, emb_dim, 1, ln_b_row_major);
 
-  aux_m = add_biases(matrix_dot(fc_w, m, aux_m), fc_b);
-  aux_m = pointwise_relu(aux_m);
-  m = add_biases(matrix_dot(proj_w, aux_m, m), proj_b);
+  matrix_dot(fc_w, 4*emb_dim, emb_dim, fc_w_row_major, m, emb_dim, emb_dim, m_row_major, aux_m, 4*emb_dim, emb_dim, aux_m_row_major);
+  add_biases(aux_m, 4*emb_dim, emb_dim, aux_m_row_major, fc_b, 4*emb_dim, 1, fc_b_row_major);
 
-  m = matrix_add(m, copy_of_m, m);
-  return m;
+  pointwise_relu(aux_m, 4*emb_dim, emb_dim, aux_m_row_major);
+
+  matrix_dot(proj_w, emb_dim, 4*emb_dim, proj_w_row_major, aux_m, 4*emb_dim, emb_dim, aux_m_row_major, m, emb_dim, emb_dim, m_row_major);
+  add_biases(m, emb_dim, emb_dim, m_row_major, proj_b, emb_dim, 1, proj_b_row_major);
+
+  matrix_add(m, emb_dim, emb_dim, m_row_major, copy_of_m, emb_dim, emb_dim, m_row_major, m, emb_dim, emb_dim, m_row_major);
 }
-// TODO: allocate all matrices
 
-// TODO: the actual functions
+void self_attention(val_t *m, int m_row_major, val_t * ln_w, int ln_w_row_major, val_t * ln_b, int ln_b_row_major, val_t * attn_w, int attn_w_row_major, val_t * attn_b, int attn_b_row_major, val_t * proj_w, int proj_w_row_major, val_t *proj_b, int proj_b_row_major, val_t* copy_of_m, int copy_of_m_row_major, val_t *aux_m, int aux_m_row_major, val_t * query, int query_row_major, val_t *key, int key_row_major, val_t *value, int value_row_major, val_t * aux_attn_m, int aux_attn_m_row_major, val_t * scratch, int scratch_row_major, val_t * aux_2, int aux_2_row_major, val_t heads){
+  layer_norm(m, emb_dim, emb_dim, m_row_major, ln_w, emb_dim, 1, ln_w_row_major, ln_b, emb_dim, 1, ln_b_row_major);
 
-struct Matrix * self_attention(struct Matrix *m, struct Matrix * ln_w, struct Matrix * ln_b, struct Matrix * attn_w, struct Matrix * attn_b, struct Matrix * proj_w, struct Matrix *proj_b, struct Matrix* copy_of_m, struct Matrix *aux_m, struct Matrix * query, struct Matrix *key, struct Matrix *value, struct Matrix * aux_attn_m, struct Matrix * scratch, struct Matrix * aux_2, val_t heads){
-  m = layer_norm(m, ln_w, ln_b);
-
-  val_t adim = m->_rows / heads;
+  val_t adim = emb_dim / heads;
   // attn weights/biases
-  aux_m = add_biases(matrix_dot(attn_w, m, aux_m), attn_b);
+  matrix_dot(attn_w, 3*emb_dim, emb_dim, attn_w_row_major, m, emb_dim, emb_dim, m_row_major, aux_m, 3*emb_dim, emb_dim, aux_m_row_major);
+  add_biases(aux_m, 3*emb_dim, emb_dim, aux_m_row_major, attn_b, emb_dim, 1, attn_b_row_major);
   /*aux_m = pointwise_relu(aux_m);
   m = add_biases(matrix_dot(proj_w, aux_m, m), proj_b);*/
 
   for(int h = 0; h < heads; h++){
     //split into key/query/val
     for(int i = 0; i < adim; i++){
-      for(int j = 0; j < m->_cols; j++){
-        set(query, i, j, get(aux_m, adim*h + i, j));
+      for(int j = 0; j < emb_dim; j++){
+        set(query, query_row_major, adim, emb_dim, i, j, get(aux_m, aux_m_row_major, 3*emb_dim, emb_dim, adim*h + i, j));
       }
     }
     for(int i = 0; i < adim; i++){
-      for(int j = 0; j < m->_cols; j++){
-        set(key, i, j, get(aux_m, i+m->_rows+adim*h, j));
+      for(int j = 0; j < emb_dim; j++){
+        set(key, key_row_major, adim, emb_dim, i, j, get(aux_m, aux_m_row_major, emb_dim*3, emb_dim, i+emb_dim+adim*h, j));
       }
     }
     for(int i = 0; i < adim; i++){
-      for(int j = 0; j < m->_cols; j++){
-        set(value, i, j, get(aux_m, i+2*m->_rows+adim*h, j));
+      for(int j = 0; j < emb_dim; j++){
+        set(value, value_row_major, adim, emb_dim, i, j, get(aux_m, aux_m_row_major, emb_dim*3, emb_dim, i+2*emb_dim+adim*h, j));
       }
     }
 
     //matrix_print(query);
     //matrix_print(key);
+    dim_t key_rows = adim, key_cols = emb_dim;
 
-    key = matrix_transpose(key);
+    matrix_transpose(&key_row_major, &key_rows, &key_cols);
 
-    aux_attn_m = matrix_dot(key, query, aux_attn_m);
+    matrix_dot(key, key_rows, key_cols, key_row_major, query, adim, emb_dim, query_row_major, aux_attn_m, emb_dim, emb_dim, aux_attn_m_row_major);
 
-    key = matrix_transpose(key);
+    matrix_transpose(&key_row_major, &key_rows, &key_cols);
     //printf("aux attn m \n");
     //matrix_print(aux_attn_m);
-    aux_attn_m = matrix_divide(aux_attn_m, sqrt(adim));
+    matrix_divide(aux_attn_m, emb_dim, emb_dim, aux_attn_m_row_major, sqrt(adim));
     //matrix_print(aux_attn_m);
-    aux_attn_m = matrix_transpose(aux_attn_m);
-    aux_attn_m = casually_masked_softmax(m->_rows, aux_attn_m, scratch);
+    matrix_transpose(&aux_attn_m_row_major, &key_cols, &key_cols);
+    casually_masked_softmax(emb_dim, aux_attn_m, emb_dim, emb_dim, aux_attn_m_row_major, scratch, 1, emb_dim, scratch_row_major);
     //aux_attn_m = matrix_transpose(aux_attn_m);
     //printf("softmax\n");
     //matrix_print(aux_attn_m);
-    query = matrix_dot(value, aux_attn_m, query);
+    matrix_dot(value, adim, emb_dim, value_row_major, aux_attn_m, emb_dim, emb_dim, aux_attn_m_row_major, query, adim, emb_dim, query_row_major);
     //printf("query \n");
     //matrix_print(query);
     for(int i = 0; i < adim; i++){
-      for(int j = 0; j < m->_cols; j++){
-        set(m, i+adim*h, j, get(query, i, j));
+      for(int j = 0; j < emb_dim; j++){
+        set(m, m_row_major, emb_dim, emb_dim, i+adim*h, j, get(query, query_row_major, adim, emb_dim, i, j));
       }
     }
   }
   //matrix_print(m);
-  aux_2 = matrix_dot(proj_w, m, aux_2);
-  aux_2 = add_biases(aux_2, proj_b);
+  matrix_dot(proj_w, emb_dim, emb_dim, proj_w_row_major, m, emb_dim, emb_dim, m_row_major, aux_2, emb_dim, emb_dim, aux_2_row_major);
+  add_biases(aux_2, emb_dim, emb_dim, aux_2_row_major, proj_b, emb_dim, 1, proj_b_row_major);
+
   //matrix_print(aux_2);
-  m = matrix_add(aux_2, copy_of_m, m);
-
-  return m;
-}
-
-
-void matrix_print(struct Matrix *m) {
-    // TODO: delete, since this can't be HLS-ified
-    for (int i=0; i<m->_rows; ++i) {
-        for (int j=0; j<m->_cols; ++j) {
-            printf("%6.2f", get(m, i, j));
-        } printf("\n");
-    } printf("\n");
-}
-
-char *eptr;
-
-struct Matrix * read_csv(char *file_name, struct Matrix * m){
-	FILE *the_file = fopen(file_name, "r");
-  if (the_file == NULL){
-    perror("Cannot open file");
-    return NULL;
-  }
-  char line[100000]; // NTFS: might need to be larger
-  int row = 0, col = 0;
-  while(fgets(line, sizeof(line), the_file)){
-    char *token;
-    token = strtok(line, ",");
-    col = 0;
-    while(token != NULL){
-      set(m, row, col, strtod(token, &eptr));
-      //a[row][col] = strtod(token, &eptr);
-      //printf("%s", token);
-      token = strtok(NULL, ",");
-      col ++;
-    }
-    printf("\n");
-    row ++;
-  }
-  fclose(the_file);
-  return m;
+  matrix_add(aux_2, emb_dim, emb_dim, aux_2_row_major, copy_of_m, emb_dim, emb_dim, m_row_major, m, emb_dim, emb_dim, m_row_major);
 }
 
 int main() 
 {
-    // TODO: read weights from file
-    // TODO: read inputs from file
+    //dot product test
+    /*val_t b[8][2] = {{0, 1}, {2, 3}, {4, 5}, {6, 7}, {8, 9},{10, 11}, {12, 13}, {14, 15}};
+    val_t a[2][2] = {{1, 2}, {5, 6}};
+    val_t c[2][8] = {{0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0}};
+    val_t d[2][2] = {{5, 7}, {1, 2}};
+    matrix_dot((val_t*)b, 8, 2, true, (val_t*) a, 2, 2, true, (val_t*) c, 8, 2, false);
+    matrix_print((val_t*)c, false, 8, 2);
+    // validate matrix add
+    matrix_add((val_t*)a, 2, 2, 1, (val_t*)d, 2, 2, 1, (val_t*)d, 2, 2, 1);
+    matrix_print((val_t*)d, 1, 2, 2);
+    //validate add add_biases
+    val_t bias[2][1] = {{2}, {6}};
+    add_biases((val_t*) a, 2, 2, 1, (val_t*)bias, 2, 1, 1);
+    matrix_print((val_t*)a, 1, 2, 2);
+    //validate matrix_exp
+    matrix_exp((val_t*)a, 2, 2, 1);
+    matrix_print((val_t*)a, 1, 2, 2);
+    //validate matrix_divide
+    matrix_divide((val_t*)d, 2, 2, 1, 3);
+    matrix_print((val_t*)d, 1, 2, 2);
 
-    // test dot product and point-wise addition
-    val_t _a[3][2] = {{2, 2}, {0, 3}, {0, 4}};
-    val_t _b[2][3] = {{2, 1, 2}, {3, 2, 4}};
-    val_t _c[3][3] = {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}};
-    val_t _d[3][3] = {{-10, -6, -12}, {-9, -6, -12}, {-12, -8, -16}};
-    val_t _e[2][2] = {{0, 0}, {0, 0}};
-    val_t _scratch[1][3] = { {0, 0, 0} };
-    struct Matrix a, b, c, d, e, scratch;
-    matrix_construct(&a, 3, 2, (val_t *)_a);
-    matrix_construct(&b, 2, 3, (val_t *)_b);
-    matrix_construct(&c, 3, 3, (val_t *)_c);
-    matrix_construct(&d, 3, 3, (val_t *)_d);
-    matrix_construct(&e, 2, 2, (val_t *)_e);
-    matrix_construct(&scratch, 1, 3, (val_t *)_scratch);
+    //validate pointwise_relu
+    val_t r[2][2] = {{1, 10}, {2, -3}};
+    pointwise_relu((val_t*)r, 2, 2, 1);
+    matrix_print((val_t*) r, 1, 2, 2);
 
-    matrix_dot(&a, &b, &c);
-    matrix_print(matrix_add(&c, &d, &c));                   // should be all zeros
-    matrix_transpose(&a);
-    matrix_transpose(&b);
-    matrix_dot(&b, &a, &c);
-    matrix_print(matrix_add(&c, matrix_transpose(&d), &c)); // should be all zeros
-    matrix_print(matrix_exp(&c));                           // should be all ones
-    matrix_print(casually_masked_softmax(3, &c, &scratch));
+    //validate softmax
+    val_t softmax_scratch[1][2] = {{0, 0}};
+    casually_masked_softmax(2, (val_t*) r, 2, 2, 1, (val_t*) softmax_scratch, 1, 2, 1);
+    matrix_print((val_t*) r, 1, 2, 2);*/
+
+    //layer_norm validation
+    /*val_t a[2][2] = {{1, 2}, {5, 9}};
+    matrix_print((val_t*) a, true, 2, 2);
+    val_t w[2][1] = {{3}, {4}};
+    val_t b[2][1] = {{2}, {6}};
+    layer_norm((val_t*) a, 2, 2, true, (val_t*) w, 2, 1, true, (val_t*) b, 2, 1, true);
+    matrix_print((val_t*) a, true, 2, 2);*/
+
+    //ffn test
+    /*val_t x[2][2] = {{1, 2}, {5, 6}};
+    val_t ln_w[2][1] = {{3}, {4}};
+    val_t ln_b[2][1] = {{2}, {6}};
+    val_t fc_w[8][2] = {{0, 1}, {2, 3}, {4, 5}, {6, 7}, {8, 9},{10, 11}, {12, 13}, {14, 15}};
+    val_t fc_b[8][1] = {{0}, {1}, {2}, {3}, {4}, {5}, {6}, {7}};
+    val_t proj_w[2][8] = {{0, 1, 2, 3, 4, 5, 6, 7}, {8, 9, 10, 11, 12, 13, 14, 15}};
+    val_t proj_b[2][1] = {{0}, {1}};
+    val_t x2[2][2] = {{1, 2}, {5, 6}};
+    val_t aux[8][2] = {{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}};
+    feed_forward_network((val_t*) x, 1, (val_t*) ln_w, 1, (val_t*) ln_b, 1, (val_t*) fc_w, 1, (val_t*) fc_b, 1, (val_t*) proj_w, 1, (val_t*) proj_b, 1, (val_t*) x2, (val_t*) aux, 1);
+    matrix_print((val_t*) x, 1, 2, 2);*/
     
-    //self-attention check
-    val_t _x[2][2] = {{0.01, .02}, {.05, .06}};
-    val_t _attn_w[6][2] = {{0, .01}, {.02, .03}, {.04, .05}, {.06, .07}, {.08, .09}, {.10, .11}};
-    val_t _attn_b[6][1] = {{0}, {.01}, {.02}, {.03}, {.04}, {.05}};
-    val_t _p_w[2][2] = {{0, 1}, {2, 3}};
-    val_t _p_b[2][1] = {{0}, {1}};
-    val_t _aux1[6][2] = {{0, 1}, {2, 3}, {4, 5}, {6, 7}, {8, 9}, {10, 11}};
-    val_t _x_copy[2][2] = {{0.01, .02}, {.05, .06}};
+    val_t x_attn[2][2] = {{0.01, .02}, {.05, .06}};
+    val_t attn_w[6][2] = {{0, .01}, {.02, .03}, {.04, .05}, {.06, .07}, {.08, .09}, {.10, .11}};
+    val_t attn_b[6][1] = {{0}, {.01}, {.02}, {.03}, {.04}, {.05}};
+    val_t p_w[2][2] = {{0, 1}, {2, 3}};
+    val_t p_b[2][1] = {{0}, {1}};
+    val_t aux1[6][2] = {{0, 1}, {2, 3}, {4, 5}, {6, 7}, {8, 9}, {10, 11}};
+    val_t x_copy[2][2] = {{0.01, .02}, {.05, .06}};
 
-    val_t _query[1][2] = {{1, 2}};
-    val_t _key[1][2] = {{1, 2}};
-    val_t _value[1][2] = {{1, 2}};
+    val_t query[1][2] = {{1, 2}};
+    val_t key[1][2] = {{1, 2}};
+    val_t value[1][2] = {{1, 2}};
 
-    val_t _ln_w[2][1] = {{.3}, {.4}};
-    val_t _ln_b[2][1] = {{.2}, {.6}};
+    val_t ln_w[2][1] = {{.3}, {.4}};
+    val_t ln_b[2][1] = {{.2}, {.6}};
 
-    val_t _aux_attn[2][2] = {{1, 2}, {1, 2}};
+    val_t aux_attn[2][2] = {{0, 0}, {0, 0}};
 
-    val_t _aux_2[2][2] = {{0.01, .02}, {.05, .06}};
+    val_t aux_2[2][2] = {{0.01, .02}, {.05, .06}};
 
-    val_t _scratch2[1][2] = {{1, 2}};
+    val_t scratch2[1][2] = {{1, 2}};
 
-    struct Matrix x, attn_w, attn_b, p_w, p_b, aux1, x_copy, query, key, value, aux_attn, ln_w, ln_b, aux_2, scratch2;
-
-    matrix_construct(&x, 2, 2, (val_t *)_x);
-    matrix_construct(&attn_w, 6, 2, (val_t *)_attn_w);
-    matrix_construct(&attn_b, 6, 1, (val_t *)_attn_b);
-    matrix_construct(&p_w, 2, 2, (val_t *)_p_w);
-    matrix_construct(&p_b, 2, 1, (val_t *)_p_b);
-    matrix_construct(&aux1, 6, 2, (val_t *)_aux1);
-    matrix_construct(&x_copy, 2, 2, (val_t *)_x_copy);
-    matrix_construct(&query, 1, 2, (val_t *)_query);
-    matrix_construct(&key, 1, 2, (val_t *)_key);
-    matrix_construct(&value, 1, 2, (val_t *)_value);
-    matrix_construct(&ln_w, 2, 1, (val_t *)_ln_w);
-    matrix_construct(&ln_b, 2, 1, (val_t *)_ln_b);
-    matrix_construct(&aux_2, 2, 2, (val_t *)_aux_2);
-    matrix_construct(&scratch2, 1, 2, (val_t *)_scratch2);
-    matrix_construct(&aux_attn, 2, 2, (val_t *)_aux_attn);
-
-    matrix_print(self_attention(&x, &ln_w, &ln_b, &attn_w, &attn_b, &p_w, &p_b, &x_copy, &aux1, &query, &key, &value, &aux_attn, &scratch2, &aux_2, 2));
+    self_attention((val_t*)x_attn, 1, (val_t*)ln_w, 1, (val_t*)ln_b, 1, (val_t*)attn_w, 1, (val_t*)attn_b, 1, (val_t*)p_w, 1, (val_t*)p_b, 1, (val_t*)x_copy, 1, (val_t*)aux1, 1, (val_t*)query, 1, (val_t*)key, 1, (val_t*)value, 1, (val_t*)aux_attn, 1, (val_t*)scratch2, 1, (val_t*)aux_2, 1, 2);
+    matrix_print((val_t*)x_attn, 1, emb_dim, emb_dim);
 }
